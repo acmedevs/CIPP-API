@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 $Tenantfilter = $request.Query.tenantfilter
 
 
@@ -14,9 +14,9 @@ $Params = @{
 
 try {
     $cmdlet = "Remove-TransportRule"
-    $GraphRequest = New-ExoRequest -tenantid $Tenantfilter -cmdlet $cmdlet -cmdParams $params
+    $GraphRequest = New-ExoRequest -tenantid $Tenantfilter -cmdlet $cmdlet -cmdParams $params -UseSystemMailbox $true
     $Result = "Deleted $($Request.query.guid)"
-    Log-request -API "TransportRules" -tenant $tenantfilter -message "Deleted transport rule $($Request.query.guid)" -sev Debug
+    Write-LogMessage -API "TransportRules" -tenant $tenantfilter -message "Deleted transport rule $($Request.query.guid)" -sev Debug
 }
 catch {
     $ErrorMessage = Get-NormalizedError -Message $_.Exception

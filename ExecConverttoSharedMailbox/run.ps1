@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 
 # Write to the Azure Functions log stream.
@@ -14,15 +14,11 @@ Write-Host "PowerShell HTTP trigger function processed a request."
 # Interact with query parameters or the body of the request.
 Try {
     $MailboxType = if ($request.query.ConvertToUser -eq 'true') { "Regular" } else { "Shared" }
-    $tenantfilter = $Request.Query.TenantFilter 
-    New-ExoRequest -tenantid $TenantFilter -cmdlet "Set-mailbox" -cmdParams @{Identity = $request.query.id; type = $MailboxType }
-
-    $Results = [pscustomobject]@{"Results" = "Succesfully completed task." }
-    Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($tenantfilter) -message "Converted mailbox $($request.query.id)" -Sev "Info"
+    $ConvertedMailbox = Set-CIPPMailboxType -userid $Request.query.id -tenantFilter $Request.query.TenantFilter -APIName $APINAME -ExecutingUser $request.headers.'x-ms-client-principal' -MailboxType $MailboxType
+    $Results = [pscustomobject]@{"Results" = "$ConvertedMailbox" }
 }
 catch {
-    Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($tenantfilter) -message "Convert to shared mailbox failed: $($_.Exception.Message)" -Sev "Error"
-    $Results = [pscustomobject]@{"Results" = "Failed. $_.Exception.Message" }
+    $Results = [pscustomobject]@{"Results" = "Failed to convert $($request.query.id) - $($_.Exception.Message)" }
 }
 # Associate values to output bindings by calling 'Push-OutputBinding'.
 Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{

@@ -1,9 +1,9 @@
 ﻿param($tenant)
-if ((Test-Path ".\Cache_Standards\$($Tenant).Standards.json")) {
-    $Contacts = (Get-Content ".\Cache_Standards\$($Tenant).Standards.json" -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue).standards.MailContacts
+$ConfigTable = Get-CippTable -tablename 'standards'
+$Contacts = ((Get-AzDataTableEntity @ConfigTable -Filter "PartitionKey eq 'standards' and RowKey eq '$tenant'").JSON | ConvertFrom-Json).standards.MailContacts
+if (!$Contacts) {
+    $Contacts = ((Get-AzDataTableEntity @ConfigTable -Filter "PartitionKey eq 'standards' and RowKey eq 'AllTenants'").JSON | ConvertFrom-Json).standards.MailContacts
 }
-
-if (!$contacts) { $Contacts = (Get-Content ".\Cache_Standards\AllTenants.Standards.json" -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue).standards.MailContacts }
 
 try {
     $TenantID = (New-GraphGetRequest -Uri "https://graph.microsoft.com/beta/organization" -tenantid $tenant)
@@ -16,8 +16,8 @@ try {
     }
     Write-Host  (ConvertTo-Json -InputObject $body)
     New-GraphPostRequest -tenantid $tenant -Uri "https://graph.microsoft.com/beta/organization/$($TenantID.id)" -Type patch -Body (ConvertTo-Json -InputObject $body) -ContentType "application/json"
-    Log-request -API "Standards" -tenant $tenant -message  "Contact email's set." -sev Info
+    Write-LogMessage -API "Standards" -tenant $tenant -message  "Contact email's set." -sev Info
 }
 catch {
-    Log-request -API "Standards" -tenant $tenant -message  "Failed to set contact emails: $($_.exception.message)" -sev Error
+    Write-LogMessage -API "Standards" -tenant $tenant -message  "Failed to set contact emails: $($_.exception.message)" -sev Error
 }

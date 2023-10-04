@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 
 function Get-LocationNameFromId {
@@ -21,7 +21,7 @@ function Get-LocationNameFromId {
     }
     $DisplayName = $Locations | Where-Object { $_.id -eq $ID } | Select-Object -ExpandProperty DisplayName
     if ([string]::IsNullOrEmpty($displayName)) {
-        return ""
+        return  $ID
     }
     else {
         return $DisplayName
@@ -42,7 +42,7 @@ function Get-RoleNameFromId {
     }
     $DisplayName = $RoleDefinitions | Where-Object { $_.id -eq $ID } | Select-Object -ExpandProperty DisplayName
     if ([string]::IsNullOrEmpty($displayName)) {
-        return ""
+        return $ID
     }
     else {
         return $DisplayName
@@ -63,7 +63,7 @@ function Get-UserNameFromId {
     }
     $DisplayName = $Users | Where-Object { $_.id -eq $ID } | Select-Object -ExpandProperty DisplayName
     if ([string]::IsNullOrEmpty($displayName)) {
-        return ""
+        return $ID
     }
     else {
         return $DisplayName

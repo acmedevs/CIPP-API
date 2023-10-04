@@ -1,77 +1,133 @@
 using namespace System.Net
-
 # Input bindings are passed in via param block.
 param($Request, $TriggerMetadata)
+Set-Location (Get-Item $PSScriptRoot).Parent.FullName
+$UserCreds = ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($request.headers.'x-ms-client-principal')) | ConvertFrom-Json)
+
+if ($Request.query.error) {
+      Add-Type -AssemblyName System.Web
+      Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+                  ContentType = 'text/html'
+                  StatusCode  = [HttpStatusCode]::Forbidden
+                  Body        = Get-normalizedError -Message [System.Web.HttpUtility]::UrlDecode($Request.Query.error_description)
+            })
+      exit
+}
+if ("admin" -notin $UserCreds.userRoles) {
+      Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+                  ContentType = 'text/html'
+                  StatusCode  = [HttpStatusCode]::Forbidden
+                  Body        = 'Could not find an admin cookie in your browser. Make sure you do not have an adblocker active, use a Chromium browser, and allow cookies. If our automatic refresh does not work, try pressing the URL bar and hitting enter. We will try to refresh ourselves in 3 seconds.<meta http-equiv="refresh" content="3" />'
+            })
+      exit
+}
+
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
-$ResourceGroup = $ENV:Website_Resource_Group
-$Subscription = ($ENV:WEBSITE_OWNER_NAME).split('+') | Select-Object -First 1
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 if ($env:MSI_SECRET) {
       Disable-AzContextAutosave -Scope Process | Out-Null
-      $AzSession = Connect-AzAccount -Identity -Subscription $Subscription
+      $AzSession = Connect-AzAccount -Identity
 }
-$KV = Get-AzKeyVault -SubscriptionID $Subscription -ResourceGroupName $ResourceGroup
+if (!$ENV:SetFromProfile) {
+      Write-Host "We're reloading from KV"
+      Get-CIPPAuthentication
+}
+
+$KV = $ENV:WEBSITE_DEPLOYMENT_ID
+$Table = Get-CIPPTable -TableName SAMWizard
+$Rows = Get-AzDataTableEntity @Table | Where-Object -Property Timestamp -GT (Get-Date).AddMinutes(-10)
 
 try {
-      if ($Request.query.count -lt 1 ) { $Results = "No authentication code found. Please go back to the wizard and click the URL again." }
+      if ($Request.query.count -lt 1 ) { $Results = "No authentication code found. Please go back to the wizard." }
 
       if ($request.body.setkeys) {
-            Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'tenantid' -SecretValue (ConvertTo-SecureString -String $request.body.tenantid -AsPlainText -Force)
-            Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'RefreshToken' -SecretValue (ConvertTo-SecureString -String $request.body.RefreshToken -AsPlainText -Force)
-            Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'ExchangeRefreshToken' -SecretValue (ConvertTo-SecureString -String $request.body.exchangeRefreshToken -AsPlainText -Force)
-            Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'applicationid' -SecretValue (ConvertTo-SecureString -String $request.body.applicationid -AsPlainText -Force)
-            Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'applicationsecret' -SecretValue (ConvertTo-SecureString -String $request.body.applicationsecret -AsPlainText -Force)
-            $Results = @{ Results = "Replaced keys succesfully. Please clear your token cache or wait 24 hours for the cache to be cleared." }
+            if ($request.body.tenantid) { Set-AzKeyVaultSecret -VaultName $kv -Name 'tenantid' -SecretValue (ConvertTo-SecureString -String $request.body.tenantid -AsPlainText -Force) } 
+            if ($request.body.RefreshToken) { Set-AzKeyVaultSecret -VaultName $kv -Name 'RefreshToken' -SecretValue (ConvertTo-SecureString -String $request.body.RefreshToken -AsPlainText -Force) }
+            if ($request.body.applicationid) { Set-AzKeyVaultSecret -VaultName $kv -Name 'applicationid' -SecretValue (ConvertTo-SecureString -String $request.body.applicationid -AsPlainText -Force) }
+            if ($request.body.applicationsecret) { Set-AzKeyVaultSecret -VaultName $kv -Name 'applicationsecret' -SecretValue (ConvertTo-SecureString -String $request.body.applicationsecret -AsPlainText -Force) }
+            $Results = @{ Results = "The keys have been replaced. Please perform a permissions check." }
       }
       if ($Request.query.error -eq 'invalid_client') { $Results = "Client ID was not found in Azure. Try waiting 10 seconds to try again, if you have gotten this error after 5 minutes, please restart the process." }
       if ($request.query.code) {
             try {
-                  $TenantId = Get-Content '.\Cache_SAMSetup\cache.tenantid'
-                  $AppID = Get-Content '.\Cache_SAMSetup\cache.appid'
+                  $TenantId = $Rows.tenantid
+                  if (!$TenantId) { $TenantId = $ENV:TenantId }
+                  $AppID = $Rows.appid
+                  if (!$AppID) { $appid = $env:ApplicationId }
                   $URL = ($Request.headers.'x-ms-original-url').split('?') | Select-Object -First 1
-                  $clientsecret = Get-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'applicationsecret' -AsPlainText
+                  $clientsecret = Get-AzKeyVaultSecret -VaultName $kv -Name 'applicationsecret' -AsPlainText
+                  if (!$clientsecret) { $clientsecret = $ENV:ApplicationSecret }
                   $RefreshToken = Invoke-RestMethod -Method POST -Body "client_id=$appid&scope=https://graph.microsoft.com/.default+offline_access+openid+profile&code=$($request.query.code)&grant_type=authorization_code&redirect_uri=$($url)&client_secret=$clientsecret" -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
-                  Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'RefreshToken' -SecretValue (ConvertTo-SecureString -String $RefreshToken.refresh_token -AsPlainText -Force)
+                  Set-AzKeyVaultSecret -VaultName $kv -Name 'RefreshToken' -SecretValue (ConvertTo-SecureString -String $RefreshToken.refresh_token -AsPlainText -Force)
                   $Results = "Authentication is now complete. You may now close this window."
-                  New-Item ".\Cache_SAMSetup\Validated.json" -Value "true" -Force
+                  try {
+                        $SetupPhase = $rows.validated = $true
+                        Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
+                  }
+                  catch {
+                        #no need.
+                  }
             }
             catch {
                   $Results = "Authentication failed. $($_.Exception.message)"
             }
       }
       if ($request.query.CreateSAM) { 
-            Remove-Item ".\Cache_SAMSetup\SamSetup.json" -Force -ErrorAction SilentlyContinue
-            Remove-Item ".\Cache_SAMSetup\Cache.*" -Force -ErrorAction SilentlyContinue
-            Remove-Item ".\Cache_SAMSetup\SamSetup.json" -Force -ErrorAction SilentlyContinue
-            Remove-Item ".\Cache_SAMSetup\PartnerSetup.json" -Force -ErrorAction SilentlyContinue
-            Remove-Item ".\Cache_SAMSetup\Validated.json"  -Force -ErrorAction SilentlyContinue
-            if ($Request.query.partnersetup) { New-Item -Path '.\Cache_SAMSetup\PartnerSetup.json' -Value 'True' }
+            $Rows = @{
+                  RowKey       = "setup"
+                  PartitionKey = "setup"
+                  validated    = $false 
+                  SamSetup     = "NotStarted"
+                  partnersetup = $false
+                  appid        = "NotStarted"
+                  tenantid     = "NotStarted"
+            }
+            Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
+            $Rows = Get-AzDataTableEntity @Table | Where-Object -Property Timestamp -GT (Get-Date).AddMinutes(-10)
+
+            if ($Request.query.partnersetup) {
+                  $SetupPhase = $Rows.partnersetup = $true
+                  Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
+            }
             $step = 1
             $DeviceLogon = New-DeviceLogin -clientid "1b730954-1685-4b74-9bfd-dac224a7b894" -Scope 'https://graph.microsoft.com/.default' -FirstLogon
-            New-Item '.\Cache_SAMSetup\SamSetup.json' -Value ($DeviceLogon | ConvertTo-Json) -Force
+            $SetupPhase = $rows.SamSetup = [string]($DeviceLogon | ConvertTo-Json) 
+            Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
             $Results = @{ message = "Your code is $($DeviceLogon.user_code). Enter the code"  ; step = $step; url = $DeviceLogon.verification_uri }
       }
       if ($Request.query.CheckSetupProcess -and $request.query.step -eq 1) {
-            $SAMSetup = Get-Content '.\Cache_SAMSetup\SamSetup.json' | ConvertFrom-Json
+            $SAMSetup = $Rows.SamSetup | ConvertFrom-Json -ErrorAction SilentlyContinue
             $Token = (New-DeviceLogin -clientid "1b730954-1685-4b74-9bfd-dac224a7b894" -Scope 'https://graph.microsoft.com/.default' -device_code $SAMSetup.device_code)
             if ($token.Access_Token) {
                   $step = 2
                   $URL = ($Request.headers.'x-ms-original-url').split('?') | Select-Object -First 1
-                  $PartnerSetup = Get-Content '.\Cache_SAMSetup\PartnerSetup.json' -ErrorAction SilentlyContinue
+                  $PartnerSetup = $Rows.partnersetup
                   $TenantId = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/organization" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method GET -ContentType 'application/json').value.id
-                  $TenantId | Out-File '.\Cache_SAMSetup\cache.tenantid' 
+                  $SetupPhase = $rows.tenantid = [string]($TenantId)
+                  Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
                   if ($PartnerSetup) {
                         $app = Get-Content '.\Cache_SAMSetup\SAMManifest.json' | ConvertFrom-Json
                         $App.web.redirectUris = @($App.web.redirectUris + $URL)
                         $app = $app | ConvertTo-Json -Depth 15
                         $AppId = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/applications" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body $app -ContentType 'application/json')
-                        $AppId.appId | Out-File '.\Cache_SAMSetup\cache.appid'
+                        $rows.appid = [string]($AppId.appId)
+                        Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
                         $attempt = 0
                         do {
                               try {
-                                    Write-Host "{ `"appId`": `"$($AppId.appId)`" }" 
+                                    try {
+                                          $SPNDefender = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/servicePrincipals" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body "{ `"appId`": `"fc780465-2017-40d4-a0c5-307022471b92`" }" -ContentType 'application/json')
+                                    }
+                                    catch {
+                                          Write-Host "didn't deploy spn for defender, probably already there."
+                                    }
+                                    try {
+                                          $SPNTeams = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/servicePrincipals" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body "{ `"appId`": `"48ac35b8-9aa8-4d74-927d-1f4a14a0b239`" }" -ContentType 'application/json')
+                                    }
+                                    catch {
+                                          Write-Host "didn't deploy spn for Teams, probably already there."
+                                    }
                                     $SPN = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/servicePrincipals" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body "{ `"appId`": `"$($AppId.appId)`" }" -ContentType 'application/json')
-                                    Write-Host "SPN"
                                     Start-Sleep 3
                                     $GroupID = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/groups?`$filter=startswith(displayName,'AdminAgents')" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method Get -ContentType 'application/json').value.id
                                     Write-Host "Id is $GroupID"
@@ -87,12 +143,13 @@ try {
                   else {
                         $app = Get-Content '.\Cache_SAMSetup\SAMManifestNoPartner.json'
                         $AppId = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/applications" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body $app -ContentType 'application/json')
-                        $AppId.appId | Out-File '.\Cache_SAMSetup\cache.appid'
+                        $rows.appid = [string]($AppId.appId)
+                        Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
                   }
                   $AppPassword = (Invoke-RestMethod "https://graph.microsoft.com/v1.0/applications/$($AppID.id)/addPassword" -Headers @{ authorization = "Bearer $($Token.Access_Token)" } -Method POST -Body '{"passwordCredential":{"displayName":"CIPPInstall"}}' -ContentType 'application/json').secretText
-                  Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'tenantid' -SecretValue (ConvertTo-SecureString -String $TenantId -AsPlainText -Force)
-                  Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'applicationid' -SecretValue (ConvertTo-SecureString -String $Appid.appid -AsPlainText -Force)
-                  Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'applicationsecret' -SecretValue (ConvertTo-SecureString -String $AppPassword -AsPlainText -Force)
+                  Set-AzKeyVaultSecret -VaultName $kv -Name 'tenantid' -SecretValue (ConvertTo-SecureString -String $TenantId -AsPlainText -Force)
+                  Set-AzKeyVaultSecret -VaultName $kv -Name 'applicationid' -SecretValue (ConvertTo-SecureString -String $Appid.appid -AsPlainText -Force)
+                  Set-AzKeyVaultSecret -VaultName $kv -Name 'applicationsecret' -SecretValue (ConvertTo-SecureString -String $AppPassword -AsPlainText -Force)
                   $Results = @{"message" = "Created application. Waiting 30 seconds for Azure propagation"; step = $step }
             }
             else {
@@ -104,12 +161,13 @@ try {
       switch ($request.query.step) {
             2 {
                   $step = 2
-                  $TenantId = Get-Content '.\Cache_SAMSetup\cache.tenantid'
-                  $AppID = Get-Content '.\Cache_SAMSetup\cache.appid'
-                  $PartnerSetup = Get-Content '.\Cache_SAMSetup\PartnerSetup.json' -ErrorAction SilentlyContinue  
-                  New-Item '.\Cache_SAMSetup\SamSetup.json' -Value ($FirstLogonRefreshtoken | ConvertTo-Json) -Force
+                  $TenantId = $Rows.tenantid
+                  $AppID = $rows.appid
+                  $PartnerSetup = $Rows.partnersetup
+                  $SetupPhase = $rows.SamSetup = [string]($FirstLogonRefreshtoken | ConvertTo-Json)
+                  Add-AzDataTableEntity @Table -Entity $Rows -Force | Out-Null
                   $URL = ($Request.headers.'x-ms-original-url').split('?') | Select-Object -First 1
-                  $Validated = Get-Content ".\Cache_SAMSetup\Validated.json" -ErrorAction SilentlyContinue
+                  $Validated = $Rows.validated
                   if ($Validated) { $step = 3 }
                   $Results = @{ message = "Give the next approval by clicking "  ; step = $step; url = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/authorize?scope=https://graph.microsoft.com/.default+offline_access+openid+profile&response_type=code&client_id=$($appid)&redirect_uri=$($url)" }
             }
@@ -121,42 +179,17 @@ try {
  
             }
             4 {
-                  $step = 4
-                  $TenantId = Get-Content '.\Cache_SAMSetup\cache.tenantid' 
-                  $FirstExchangeLogonRefreshtoken = New-DeviceLogin -clientid 'a0c73c16-a7e3-4564-9a95-2bdf47383716' -Scope 'https://outlook.office365.com/.default' -FirstLogon  -TenantId $TenantId
-                  New-Item '.\Cache_SAMSetup\SamSetup.json' -Value ($FirstExchangeLogonRefreshtoken | ConvertTo-Json) -Force
+                  Remove-AzDataTableEntity @Table -Entity $Rows
+
                   $step = 5
-                  $Results = @{ message = "Your code is $($FirstExchangeLogonRefreshtoken.user_code). Enter the code "  ; step = $step; url = $FirstExchangeLogonRefreshtoken.verification_uri }            
-            }
-            5 {
-                  $step = 5
-                  $TenantId = Get-Content '.\Cache_SAMSetup\cache.tenantid'
-                  $SAMSetup = Get-Content '.\Cache_SAMSetup\SamSetup.json' | ConvertFrom-Json
-                  $ExchangeRefreshToken = (New-DeviceLogin -clientid 'a0c73c16-a7e3-4564-9a95-2bdf47383716' -Scope 'https://outlook.office365.com/.default' -device_code $SAMSetup.device_code)
-                  if ($ExchangeRefreshToken.Refresh_Token) {
-                        Set-AzKeyVaultSecret -VaultName $kv.vaultname -Name 'exchangerefreshtoken' -SecretValue (ConvertTo-SecureString -String $ExchangeRefreshToken.Refresh_Token -AsPlainText -Force)
-                        $step = 6
-                        $Results = @{"message" = "Retrieved refresh token and saving to Keyvault."; step = $step }
-                  }
-                  else {
-                        $Results = @{ message = "Your code is $($SAMSetup.user_code). Enter the code "  ; step = $step; url = $SAMSetup.verification_uri }            
-                  }
-            }
-            6 {
-                  Remove-Item ".\Cache_SAMSetup\Validated.json"  -Force -ErrorAction SilentlyContinue
-                  Remove-Item ".\Cache_SAMSetup\SamSetup.json" -Force -ErrorAction SilentlyContinue
-                  Remove-Item ".\Cache_SAMSetup\Cache.*" -Force -ErrorAction SilentlyContinue
-                  Remove-Item ".\Cache_SAMSetup\SamSetup.json" -Force -ErrorAction SilentlyContinue
-                  Remove-Item ".\Cache_SAMSetup\PartnerSetup.json" -Force -ErrorAction SilentlyContinue
-                  $step = 7
-                  $Results = @{"message" = "Installation completed."; step = $step
+                  $Results = @{"message" = "Installation completed."; step = $step 
                   }
             }
       }
 
 }
 catch {
-      $Results = [pscustomobject]@{"Results" = "Failed. $($_.Exception.message)" ; step = $step }
+      $Results = [pscustomobject]@{"Results" = "Failed. $($_.InvocationInfo.ScriptLineNumber):  $($_.Exception.message)" ; step = $step }
 }
 
 # Associate values to output bindings by calling 'Push-OutputBinding'.

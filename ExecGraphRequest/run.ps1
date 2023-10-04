@@ -4,15 +4,15 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
 
 Function ConvertTo-FlatObject {
         # https://evotec.xyz/powershell-converting-advanced-object-to-flat-object/ - MIT License
         [CmdletBinding()]
         Param (
                 [Parameter(ValueFromPipeLine)][Object[]]$Objects,
-                [String]$Separator = ".",
-                [ValidateSet("", 0, 1)]$Base = 1,
+                [String]$Separator = '.',
+                [ValidateSet('', 0, 1)]$Base = 1,
                 [int]$Depth = 5,
                 [Parameter(DontShow)][String[]]$Path,
                 [Parameter(DontShow)][System.Collections.IDictionary] $OutputObject
@@ -26,7 +26,7 @@ Function ConvertTo-FlatObject {
                 }
         }
         End {
-                If ($PSBoundParameters.ContainsKey("OutputObject")) {
+                If ($PSBoundParameters.ContainsKey('OutputObject')) {
                         $Object = $InputObjects[0]
                         $Iterate = [ordered] @{}
                         if ($null -eq $Object) {
@@ -76,17 +76,24 @@ Function ConvertTo-FlatObject {
 }
 $TenantFilter = $Request.Query.TenantFilter
 try {
-        if ($TenantFilter -ne "AllTenants") {
-                $RawGraphRequest = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/$($Request.Query.Endpoint)" -tenantid $TenantFilter
+        if ($TenantFilter -ne 'AllTenants') {
+                $RawGraphRequest = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/$($Request.Query.Endpoint)" -tenantid $TenantFilter -NoPagination [boolean]$Request.query.DisablePagination -ComplexFilter
         }
         else {
-                $RawGraphRequest = Get-tenants | ForEach-Object {
-                        $DefaultDomainName = $_.defaultdomainname
-                        $TenantName = $_.displayName
-                        New-GraphGetRequest -uri "https://graph.microsoft.com/beta/$($Request.Query.Endpoint)" -tenantid $DefaultDomainName } | Select-Object @{
-                        label      = 'Tenant'
-                        expression = { $TenantName }
-                }, *
+                $RawGraphRequest = Get-Tenants | ForEach-Object -Parallel {
+                        Import-Module .\GraphHelper.psm1
+                        try {
+                                $DefaultDomainName = $_.defaultDomainName
+                                $TenantName = $_.displayName
+                                New-GraphGetRequest -uri "https://graph.microsoft.com/beta/$($using:Request.Query.Endpoint)" -tenantid $DefaultDomainName -NoPagination [boolean]$using:Request.query.DisablePagination -ComplexFilter | Select-Object @{
+                                        label      = 'Tenant'
+                                        expression = { $TenantName }
+                                }, *
+                        }
+                        catch {
+                                continue
+                        }
+                } 
 
         }
         $GraphRequest = $RawGraphRequest | Where-Object -Property '@odata.context' -EQ $null | ConvertTo-FlatObject 

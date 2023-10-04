@@ -11,8 +11,29 @@
 
 # Authenticate with Azure PowerShell using MSI.
 # Remove this if you are not planning on using MSI or Azure PowerShell.
-import-module .\GraphHelper.psm1
+Import-Module .\GraphHelper.psm1
+try {
+    Import-Module Az.KeyVault -ErrorAction Stop
+} catch { $_.Exception.Message }
+try {
+    Import-Module Az.Accounts
+} catch { $_.Exception.Message }
+Import-Module GraphRequests
+Import-Module CippExtensions
+Import-Module CippCore
 
+try {
+    Disable-AzContextAutosave -Scope Process | Out-Null
+} catch {}
+
+try {
+    if (!$ENV:SetFromProfile) {
+        Write-Host "We're reloading from KV"
+        $Auth = Get-CIPPAuthentication
+    }
+} catch {
+    Write-LogMessage -message "Could not retrieve keys from Keyvault: $($_.Exception.Message)" -Sev 'CRITICAL'
+}
 
 # Uncomment the next line to enable legacy AzureRm alias in Azure PowerShell.
 # Enable-AzureRmAlias

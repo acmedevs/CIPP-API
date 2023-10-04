@@ -4,18 +4,41 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
+Set-Location (Get-Item $PSScriptRoot).Parent.FullName
 
+$Table = Get-CippTable -tablename 'templates'
 
-# Write to the Azure Functions log stream.
-Write-Host "PowerShell HTTP trigger function processed a request."
-Write-Host $Request.query.id
-$Templates = Get-ChildItem "Config\*.IntuneTemplate.json" | ForEach-Object { Get-Content $_ | ConvertFrom-Json }
+$Templates = Get-ChildItem 'Config\*.IntuneTemplate.json' | ForEach-Object {
+    $Entity = @{
+        JSON         = "$(Get-Content $_)"
+        RowKey       = "$($_.name)"
+        PartitionKey = 'IntuneTemplate'
+        GUID         = "$($_.name)"
+    }
+    Add-AzDataTableEntity @Table -Entity $Entity -Force
+}
+
+#List new policies
+$Table = Get-CippTable -tablename 'templates'
+$Filter = "PartitionKey eq 'IntuneTemplate'"
+$Templates = (Get-AzDataTableEntity @Table -Filter $Filter).JSON | ConvertFrom-Json
+if ($Request.query.View) {
+    $Templates = $Templates | ForEach-Object {
+        $data = $_.RAWJson | ConvertFrom-Json
+        $data | Add-Member -NotePropertyName 'displayName' -NotePropertyValue $_.Displayname -Force
+        $data | Add-Member -NotePropertyName 'description' -NotePropertyValue $_.Description -Force
+        $data | Add-Member -NotePropertyName 'Type' -NotePropertyValue $_.Type
+        $data | Add-Member -NotePropertyName 'GUID' -NotePropertyValue $_.GUID
+        $data
+    }
+}
+
 if ($Request.query.ID) { $Templates = $Templates | Where-Object -Property guid -EQ $Request.query.id }
 
 
 # Associate values to output bindings by calling 'Push-OutputBinding'.
 Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
         StatusCode = [HttpStatusCode]::OK
-        Body       = @($Templates)
+        Body       = ($Templates | ConvertTo-Json -Depth 10)
     })

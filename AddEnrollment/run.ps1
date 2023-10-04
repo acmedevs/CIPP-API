@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 
 # Write to the Azure Functions log stream.
@@ -36,13 +36,13 @@ $results = foreach ($Tenant in $tenants) {
         Write-Host $body
         $ExistingStatusPage = (New-GraphGetRequest -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations" -tenantid $Tenant) | Where-Object { $_.id -like "*DefaultWindows10EnrollmentCompletionPageConfiguration" }
         $GraphRequest = New-GraphPOSTRequest -uri "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations/$($ExistingStatusPage.ID)" -body $body -Type PATCH -tenantid $tenant
-        "Succesfully changed default enrollment status page for $($Tenant)"
-        Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenant -message "Added Autopilot Enrollment Status Page $($Displayname)" -Sev "Info"
+        "Successfully changed default enrollment status page for $($Tenant)"
+        Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenant -message "Added Autopilot Enrollment Status Page $($Displayname)" -Sev "Info"
 
     }
     catch {
         "Failed to change default enrollment status page for $($Tenant): $($_.Exception.Message)"
-        Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenant -message "Failed adding Autopilot Enrollment Status Page $($Displayname). Error: $($_.Exception.Message)" -Sev "Error"
+        Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenant -message "Failed adding Autopilot Enrollment Status Page $($Displayname). Error: $($_.Exception.Message)" -Sev "Error"
         continue
     }
 

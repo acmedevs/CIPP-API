@@ -1,9 +1,8 @@
 ﻿param($tenant)
-if ((Test-Path ".\Cache_Standards\$($Tenant).Standards.json")) {
-    $AllowedAppIdsForTenant = (Get-Content ".\Cache_Standards\$($Tenant).Standards.json" -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue).Standards.OauthConsent.AllowedApps -split ','
-}
-else {
-    $AllowedAppIdsForTenant = (Get-Content ".\Cache_Standards\AllTenants.Standards.json" -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue).Standards.OauthConsent.AllowedApps -split ','
+$ConfigTable = Get-CippTable -tablename 'standards'
+$AllowedAppIdsForTenant = ((Get-AzDataTableEntity @ConfigTable -Filter "PartitionKey eq 'standards' and RowKey eq '$tenant'").JSON | ConvertFrom-Json).Standards.OauthConsent.AllowedApps -split ','
+if (!$AllowedAppIdsForTenant) {
+    $AllowedAppIdsForTenant = ((Get-AzDataTableEntity @ConfigTable -Filter "PartitionKey eq 'standards' and RowKey eq 'AllTenants'").JSON | ConvertFrom-Json).Standards.OauthConsent.AllowedApps -split ','
 }
 try {
     $State = (New-GraphGetRequest -Uri "https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy" -tenantid $tenant)
@@ -30,8 +29,8 @@ try {
     if ($AllowedAppIdsForTenant) {
     }
 
-    Log-request -API "Standards" -tenant $tenant -message  "Application Consent Mode has been enabled." -sev Info
+    Write-LogMessage -API "Standards" -tenant $tenant -message  "Application Consent Mode has been enabled." -sev Info
 }
 catch {
-    Log-request -API "Standards" -tenant $tenant -message  "Failed to apply Application Consent Mode Error: $($_.exception.message)" -sev Error
+    Write-LogMessage -API "Standards" -tenant $tenant -message  "Failed to apply Application Consent Mode Error: $($_.exception.message)" -sev Error
 }

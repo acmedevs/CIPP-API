@@ -2,15 +2,15 @@ using namespace System.Net
 
 # Input bindings are passed in via param block.
 param($Request, $TriggerMetadata)
-
+Set-Location (Get-Item $PSScriptRoot).Parent.FullName
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 $APIVersion = Get-Content "version_latest.txt" | Out-String
 $CIPPVersion = $request.query.localversion
 
 $RemoteAPIVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/KelvinTegelaar/CIPP-API/master/version_latest.txt"
-$RemoteCIPPVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/KelvinTegelaar/CIPP/master/version_latest.txt"
+$RemoteCIPPVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/KelvinTegelaar/CIPP/master/public/version_latest.txt"
 
 $version = [PSCustomObject]@{
     LocalCIPPVersion     = $CIPPVersion

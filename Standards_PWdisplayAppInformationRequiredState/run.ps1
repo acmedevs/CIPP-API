@@ -2,12 +2,12 @@ param($tenant)
 
 try {
     $body = @"
-    {"@odata.context":"https://graph.microsoft.com/beta/$metadata#authenticationMethodConfigurations/$entity","@odata.type":"#microsoft.graph.microsoftAuthenticatorAuthenticationMethodConfiguration","id":"MicrosoftAuthenticator","state":"enabled","includeTargets@odata.context":"https://graph.microsoft.com/beta/$metadata#policies/authenticationMethodsPolicy/authenticationMethodConfigurations('MicrosoftAuthenticator')/microsoft.graph.microsoftAuthenticatorAuthenticationMethodConfiguration/includeTargets","includeTargets":[{"targetType":"group","id":"all_users","isRegistrationRequired":false,"authenticationMode":"any","outlookMobileAllowedState":"default","displayAppInformationRequiredState":"enabled","numberMatchingRequiredState":"enabled"}]}
+{"@odata.type":"#microsoft.graph.microsoftAuthenticatorAuthenticationMethodConfiguration","id":"MicrosoftAuthenticator","includeTargets":[{"id":"all_users","isRegistrationRequired":false,"targetType":"group","authenticationMode":"any"}],"excludeTargets":[],"state":"enabled","isSoftwareOathEnabled":false,"featureSettings":{"displayLocationInformationRequiredState":{"state":"enabled","includeTarget":{"id":"all_users","targetType":"group","displayName":"All users"}},"displayAppInformationRequiredState":{"state":"enabled","includeTarget":{"id":"all_users","targetType":"group","displayName":"All users"}},"companionAppAllowedState":{"state":"default","includeTarget":{"id":"all_users","targetType":"group","displayName":"All users"}}}}
 "@
     (New-GraphPostRequest -tenantid $tenant -Uri "https://graph.microsoft.com/beta/policies/authenticationMethodsPolicy/authenticationMethodConfigurations/microsoftAuthenticator" -Type patch -Body $body -ContentType "application/json")
 
-    Log-request  -API "Standards" -tenant $tenant -message "Enabled passwordless with Information and Number Matching." -sev Info
+    Write-LogMessage  -API "Standards" -tenant $tenant -message "Enabled passwordless with Information and Number Matching." -sev Info
 }
 catch {
-    Log-request  -API "Standards" -tenant $tenant -message "Failed to enable passwordless with Information and Number Matching. Error: $($_.exception.message)"
+    Write-LogMessage  -API "Standards" -tenant $tenant -message "Failed to enable passwordless with Information and Number Matching. Error: $($_.exception.message)" -sev "Error"
 }
