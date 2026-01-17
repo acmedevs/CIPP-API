@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ListmailboxPermissions {
+function Invoke-ListmailboxPermissions {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -9,16 +7,34 @@ Function Invoke-ListmailboxPermissions {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
     # Interact with query parameters or the body of the request.
     $TenantFilter = $Request.Query.tenantFilter
     $UserID = $Request.Query.userId
+    $UseReportDB = $Request.Query.UseReportDB
+    $ByUser = $Request.Query.ByUser
 
     try {
+        # If UseReportDB is specified and no specific UserID, retrieve from report database
+        if ($UseReportDB -eq 'true' -and -not $UserID) {
+
+            # Call the report function with proper parameters
+            $ReportParams = @{
+                TenantFilter = $TenantFilter
+            }
+            if ($ByUser -eq 'true') {
+                $ReportParams.ByUser = $true
+            }
+
+            $GraphRequest = Get-CIPPMailboxPermissionReport @ReportParams
+            $StatusCode = [HttpStatusCode]::OK
+
+            return ([HttpResponseContext]@{
+                    StatusCode = $StatusCode
+                    Body       = @($GraphRequest)
+                })
+        }
+
+        # Original live query logic for specific user
         $Requests = @(
             @{
                 CmdletInput = @{
@@ -70,8 +86,7 @@ Function Invoke-ListmailboxPermissions {
         $StatusCode = [HttpStatusCode]::Forbidden
         $GraphRequest = $ErrorMessage
     }
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @($GraphRequest)
         })

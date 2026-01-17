@@ -13,7 +13,14 @@ function Invoke-CIPPStandardOauthConsent {
         CAT
             Entra (AAD) Standards
         TAG
-            "CIS"
+            "CIS M365 5.0 (1.5.1)"
+            "CISA (MS.AAD.4.2v1)"
+            "EIDSCA.AP08"
+            "EIDSCA.AP09"
+            "Essential 8 (1175)"
+            "NIST CSF 2.0 (PR.AA-05)"
+        EXECUTIVETEXT
+            Requires administrative approval before employees can grant applications access to company data, preventing unauthorized data sharing and potential security breaches. This protects against malicious applications while allowing approved business tools to function normally.
         ADDEDCOMPONENT
             {"type":"textField","name":"standards.OauthConsent.AllowedApps","label":"Allowed application IDs, comma separated","required":false}
         IMPACT
@@ -28,12 +35,18 @@ function Invoke-CIPPStandardOauthConsent {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/entra-aad-standards#medium-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($tenant, $settings)
 
-    $State = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $tenant
+    try {
+        $State = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $tenant
+    } catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the OauthConsent state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
     $StateIsCorrect = if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -eq 'managePermissionGrantsForSelf.cipp-consent-policy') { $true } else { $false }
 
     if ($Settings.remediate -eq $true) {
@@ -87,12 +100,12 @@ function Invoke-CIPPStandardOauthConsent {
 
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'OauthConsent' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
-        if ($StateIsCorrect) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $State | Select-Object -Property permissionGrantPolicyIdsAssignedToDefaultUserRole
+        $CurrentValue = @{
+            permissionGrantPolicyIdsAssignedToDefaultUserRole = $State.permissionGrantPolicyIdsAssignedToDefaultUserRole
         }
-
-        Set-CIPPStandardsCompareField -FieldName 'standards.OauthConsent' -FieldValue $FieldValue -Tenant $tenant
+        $ExpectedValue = @{
+            permissionGrantPolicyIdsAssignedToDefaultUserRole = @('managePermissionGrantsForSelf.cipp-consent-policy')
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.OauthConsent' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $tenant
     }
 }
