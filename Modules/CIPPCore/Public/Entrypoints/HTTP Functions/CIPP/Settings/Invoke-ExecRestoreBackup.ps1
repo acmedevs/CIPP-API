@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ExecRestoreBackup {
+function Invoke-ExecRestoreBackup {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -11,25 +9,65 @@ Function Invoke-ExecRestoreBackup {
     param($Request, $TriggerMetadata)
 
     $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-    try {
+    $RestrictedTables = @('AccessRoleGroups', 'CustomRoles') # tables that require superadmin to restore
 
+    # Resolve the calling user's roles, including Entra group-based roles
+    $CallingUser = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Request.Headers.'x-ms-client-principal')) | ConvertFrom-Json
+    if (($CallingUser.userRoles | Measure-Object).Count -eq 2 -and $CallingUser.userRoles -contains 'authenticated' -and $CallingUser.userRoles -contains 'anonymous') {
+        $CallingUser = Test-CIPPAccessUserRole -User $CallingUser
+    }
+    $IsSuperAdmin = $CallingUser.userRoles -contains 'superadmin'
+
+    try {
         if ($Request.Body.BackupName -like 'CippBackup_*') {
-            $Table = Get-CippTable -tablename 'CIPPBackup'
-            $Backup = Get-CippAzDataTableEntity @Table -Filter "RowKey eq '$($Request.Body.BackupName)'"
+            # Use Get-CIPPBackup which already handles fetching from blob storage
+            $Backup = Get-CIPPBackup -Type 'CIPP' -Name $Request.Body.BackupName
             if ($Backup) {
-                $BackupData = $Backup.Backup | ConvertFrom-Json -ErrorAction SilentlyContinue | Select-Object * -ExcludeProperty ETag, Timestamp
+                $raw = $Backup.Backup
+                $BackupData = $null
+
+                # Get-CIPPBackup already fetches blob content, so raw should be JSON string
+                try {
+                    if ($raw -is [string]) {
+                        $BackupData = $raw | ConvertFrom-Json -ErrorAction Stop
+                    } else {
+                        $BackupData = $raw | Select-Object * -ExcludeProperty ETag, Timestamp
+                    }
+                } catch {
+                    throw "Failed to parse backup JSON: $($_.Exception.Message)"
+                }
+
+                $SelectedTypes = $Request.Body.SelectedTypes
+                if ($SelectedTypes -and $SelectedTypes.Count -gt 0) {
+                    $BackupData = $BackupData | Where-Object {
+                        $item = $_
+                        if ($item.table -eq 'templates') {
+                            $typeKey = "templates:$($item.PartitionKey)"
+                        } else {
+                            $typeKey = $item.table
+                        }
+                        $SelectedTypes -contains $typeKey
+                    }
+                }
+                $RestoredCount = 0
                 $BackupData | ForEach-Object {
+                    if ($_.table -like 'cache*') {
+                        return
+                    }
+                    if ($RestrictedTables -contains $_.table -and -not $IsSuperAdmin) {
+                        Write-Information "Skipping restricted table '$($_.table)' - user does not have superadmin rights"
+                        return
+                    }
                     $Table = Get-CippTable -tablename $_.table
-                    $ht2 = @{ }
+                    $ht2 = @{}
                     $_.psobject.properties | ForEach-Object { $ht2[$_.Name] = [string]$_.Value }
                     $Table.Entity = $ht2
-                    Add-CIPPAzDataTableEntity @Table -Force
+                    Add-AzDataTableEntity @Table -Force
+                    $RestoredCount++
                 }
-                Write-LogMessage -headers $Request.Headers -API $APINAME -message 'Created backup' -Sev 'Debug'
+                Write-LogMessage -headers $Request.Headers -API $APINAME -message "Restored backup $($Request.Body.BackupName) - $RestoredCount rows restored" -Sev 'Info'
                 $body = [pscustomobject]@{
-                    'Results' = 'Successfully restored backup.'
+                    'Results' = "Successfully restored $RestoredCount rows from backup."
                 }
             } else {
                 $body = [pscustomobject]@{
@@ -37,17 +75,26 @@ Function Invoke-ExecRestoreBackup {
                 }
             }
         } else {
+            $RestoredCount = 0
             foreach ($line in ($Request.body | Select-Object * -ExcludeProperty ETag, Timestamp)) {
+                if ($line.table -like 'cache*') {
+                    continue
+                }
+                if ($RestrictedTables -contains $line.table -and -not $IsSuperAdmin) {
+                    Write-Information "Skipping restricted table '$($line.table)' - user does not have superadmin rights"
+                    continue
+                }
                 $Table = Get-CippTable -tablename $line.table
                 $ht2 = @{}
                 $line.psobject.properties | ForEach-Object { $ht2[$_.Name] = [string]$_.Value }
                 $Table.Entity = $ht2
                 Add-AzDataTableEntity @Table -Force
+                $RestoredCount++
             }
-            Write-LogMessage -headers $Request.Headers -API $APINAME -message 'Created backup' -Sev 'Debug'
+            Write-LogMessage -headers $Request.Headers -API $APINAME -message "Restored backup - $RestoredCount rows restored" -Sev 'Info'
 
             $body = [pscustomobject]@{
-                'Results' = 'Successfully restored backup.'
+                'Results' = "Successfully restored $RestoredCount rows from backup."
             }
         }
     } catch {
@@ -56,8 +103,7 @@ Function Invoke-ExecRestoreBackup {
     }
 
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = $body
         })
